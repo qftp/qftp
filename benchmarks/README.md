@@ -28,6 +28,14 @@ To start an interactive ftp session from the client container, run:
 docker compose exec ftp-client ftp ftp-server
 ```
 
+## Generate random files
+
+Use the provided `gen_files.sh` script:
+```bash
+# <size> <count> <target-dir>
+./gen_files.sh 100M 10 upload
+```
+
 ## Applying `tc` commands
 
 On the host you will find 3 new network interfaces (a bridge and 2 `veth` interfaces). You can apply `tc` commands to those.
