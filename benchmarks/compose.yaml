@@ -4,14 +4,6 @@ services:
   ftp-server:
     build:
       context: ./server
-    networks:
-      - ftp-net
   ftp-client:
     build:
       context: ./client
-    networks:
-      - ftp-net
-
-networks:
-  ftp-net:
-    driver: bridge

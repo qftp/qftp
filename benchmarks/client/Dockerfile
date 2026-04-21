@@ -1,9 +1,13 @@
 FROM debian:13-slim
 
-RUN apt-get update && \
-    apt-get install -y ftp && \
-    apt-get clean && \
-    rm -rf /var/lib/apt/lists/*
+# See https://docs.docker.com/build/building/best-practices/#apt-get
+RUN apt-get update && apt-get install -y \
+    ftp \
+    iputils-ping \
+    netbase \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --chmod=600 .netrc /root/.netrc
 
 RUN mkdir /ftp-files
 
