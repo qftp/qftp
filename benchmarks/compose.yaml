@@ -3,7 +3,7 @@ name: ft-benchmarks
 services:
   ftp-server:
     build:
-      context: ./server
+      context: ./tools/ftp/server
   ftp-client:
     build:
-      context: ./client
+      context: ./tools/ftp/client
