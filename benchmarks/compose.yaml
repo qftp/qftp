@@ -4,6 +4,10 @@ services:
   ftp-server:
     build:
       context: ./tools/ftp/server
+    volumes:
+      - ./download-files:/home/benchmark/files
   ftp-client:
     build:
       context: ./tools/ftp/client
+    volumes:
+      - ./upload-files:/ftp-files/uploads

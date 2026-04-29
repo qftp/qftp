@@ -9,7 +9,7 @@ RUN apt-get update && apt-get install -y \
 
 COPY --chmod=600 .netrc /root/.netrc
 
-RUN mkdir /ftp-files
+RUN mkdir -p /ftp-files/uploads/
 
 WORKDIR /ftp-files
 

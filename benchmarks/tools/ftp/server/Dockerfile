@@ -11,6 +11,8 @@ RUN useradd -m benchmark && \
 
 COPY vsftpd.conf /etc/vsftpd.conf
 
+RUN mkdir -p /home/benchmark/files/
+
 EXPOSE 21 21100-21110
 
 CMD ["vsftpd"]
