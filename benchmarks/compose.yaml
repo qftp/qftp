@@ -5,9 +5,19 @@ services:
     build:
       context: ./tools/ftp/server
     volumes:
-      - ./download-files:/home/benchmark/files
+      - ./download-files/ftp:/home/benchmark/files
   ftp-client:
     build:
       context: ./tools/ftp/client
     volumes:
-      - ./upload-files:/ftp-files/uploads
+      - ./upload-files/ftp:/ftp-files/uploads
+  http3-server:
+    build:
+      context: ./tools/http3/server
+    volumes:
+      - ./download-files/http3:/var/www/html/files
+  http3-client:
+    build:
+      context: ./tools/http3/client
+    volumes:
+      - ./upload-files/http3:/files/uploads

@@ -28,6 +28,17 @@ To start an interactive ftp session from the client container, run:
 docker compose exec ftp-client ftp ftp-server
 ```
 
+To download file over HTTP/3 run:
+```bash
+docker compose exec http3-client curl -- -kvO --http3 https://http3-server/files/file1
+```
+
+To upload file over HTTP/3 run:
+```bash
+docker compose exec http3-client curl -kv --http3 -T file1 https://http3-server/file1
+```
+
+
 ## Generate random files
 
 Use the provided `gen_files.sh` script:
