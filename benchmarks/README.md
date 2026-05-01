@@ -1,16 +1,18 @@
 # File transfer benchmarks
 
-This directory contains setup of two `debian:13-slim` based Docker containers, using `docker compose`:
-- ftp-server - based on `vsftpd`
-- ftp-client
+This directory contains setup of multiple file transfer tools done using Docker Compose. Per each tool, 2 Docker containers are defined (the server and client) and based on `debian:13-slim`. The `Dockerfile` files are in the `tools` directory. Additional directories are created upon starting the containers to house the download and upload files.
 
-The default ftp credentials are:
-- username: `benchmark`
-- password: `benchmark`
+Tests and testing utilities are written in Python and stored in the `tests` directory.
 
-## Container setup
+## Setup directories
 
-The containers are used for running file transfer benchmarks.
+Before starting Docker you need to create some directories first, which will allow you to run tests without `sudo`:
+```bash
+mkdir download-files upload-files
+```
+
+## Manage tool containers
+
 You can start them like so:
 ```bash
 docker compose up --build -d
@@ -21,32 +23,8 @@ To later stop them, use:
 docker compose down
 ```
 
-## Interactive use
+## Run tests
 
-To start an interactive ftp session from the client container, run:
 ```bash
-docker compose exec ftp-client ftp ftp-server
+python tests/test1.py
 ```
-
-To download file over HTTP/3 run:
-```bash
-docker compose exec http3-client curl -- -kvO --http3 https://http3-server/files/file1
-```
-
-To upload file over HTTP/3 run:
-```bash
-docker compose exec http3-client curl -kv --http3 -T file1 https://http3-server/file1
-```
-
-
-## Generate random files
-
-Use the provided `gen_files.sh` script:
-```bash
-# <size> <count> <target-dir>
-./gen_files.sh 100M 10 upload
-```
-
-## Applying `tc` commands
-
-On the host you will find 3 new network interfaces (a bridge and 2 `veth` interfaces). You can apply `tc` commands to those.

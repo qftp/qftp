@@ -5,6 +5,8 @@ import time
 from pathlib import Path
 import shutil
 
+benchmarks_dir = Path(__file__).resolve().parent.parent
+
 
 def _clear_directory(dir: str):
     dir_path = Path(dir)
@@ -39,14 +41,14 @@ def _create_random_files(count: int, size_bytes: int, dir: str):
 
 def create_download_files(count: int, size: str):
     """Create `count` files with random contents of size `size` for download tests."""
-    download_dir = "../download-files"
+    download_dir = benchmarks_dir / "download-files"
     _clear_directory(download_dir)
     _create_random_files(count, _parse_bytes(size), download_dir)
 
 
 def create_upload_files(count: int, size: str):
     """Create `count` files with random contents of size `size` for upload tests."""
-    upload_dir = "../upload-files"
+    upload_dir = benchmarks_dir / "upload-files"
     _clear_directory(upload_dir)
     _create_random_files(count, _parse_bytes(size), upload_dir)
 
@@ -56,7 +58,7 @@ def _tool_run(tool: str, cmd: list[str]) -> str:
         "docker",
         "compose",
         "--project-directory",
-        "../",
+        str(benchmarks_dir),
         "exec",
         "--interactive=false",
         tool + "-client",
@@ -86,7 +88,7 @@ def tool_upload(tool: str, file: str) -> float:
 
     match tool:
         case "ftp":
-            _tool_run(tool, ["ftp", "ftp-server", "put", "/ftp-files/uploads/" + file])
+            _tool_run(tool, ["lftp", "-c", f'"open ftp-server; put /ftp-files/uploads/{file}"'])
         # TODO: add http3 support
         case _:
             sys.exit("tool_upload: unsupported tool " + tool)
