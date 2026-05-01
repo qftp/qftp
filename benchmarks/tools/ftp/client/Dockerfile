@@ -2,7 +2,7 @@ FROM debian:13-slim
 
 # See https://docs.docker.com/build/building/best-practices/#apt-get
 RUN apt-get update && apt-get install -y \
-    ftp \
+    lftp \
     iputils-ping \
     netbase \
     && rm -rf /var/lib/apt/lists/*

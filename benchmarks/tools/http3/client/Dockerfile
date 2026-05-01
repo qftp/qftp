@@ -10,6 +10,6 @@ RUN apt-get update && apt-get install -y \
 
 RUN mkdir -p /files/uploads
 
-WORKDIR /files/uploads
+WORKDIR /files
 
 CMD ["sleep", "infinity"]
