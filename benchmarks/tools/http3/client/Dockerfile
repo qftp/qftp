@@ -6,6 +6,7 @@ FROM debian:13-slim
 RUN apt-get update && apt-get install -y \
     curl \
     iputils-ping \
+    iproute2 \
     && rm -rf /var/lib/apt/lists/*
 
 RUN mkdir -p /files/uploads

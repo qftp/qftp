@@ -4,6 +4,7 @@ FROM debian:13-slim
 RUN apt-get update && apt-get install -y \
     lftp \
     iputils-ping \
+    iproute2 \
     netbase \
     && rm -rf /var/lib/apt/lists/*
 

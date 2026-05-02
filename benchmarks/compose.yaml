@@ -6,18 +6,26 @@ services:
       context: ./tools/ftp/server
     volumes:
       - ./download-files:/home/benchmark/files
+    cap_add:
+      - NET_ADMIN
   ftp-client:
     build:
       context: ./tools/ftp/client
     volumes:
       - ./upload-files:/ftp-files/uploads
+    cap_add:
+      - NET_ADMIN
   http3-server:
     build:
       context: ./tools/http3/server
     volumes:
       - ./download-files:/var/www/html/files
+    cap_add:
+      - NET_ADMIN
   http3-client:
     build:
       context: ./tools/http3/client
     volumes:
       - ./upload-files:/files/uploads
+    cap_add:
+      - NET_ADMIN

@@ -6,6 +6,7 @@ from pathlib import Path
 import shutil
 
 benchmarks_dir = Path(__file__).resolve().parent.parent
+tools = ["ftp", "http3"]
 
 
 def _clear_directory(dir: str):
@@ -53,7 +54,7 @@ def create_upload_files(count: int, size: str):
     _create_random_files(count, _parse_bytes(size), upload_dir)
 
 
-def _tool_run(tool: str, cmd: list[str]) -> str:
+def _tool_run(tool: str, cmd: list[str], server=False) -> str:
     result = subprocess.run([
         "docker",
         "compose",
@@ -61,37 +62,98 @@ def _tool_run(tool: str, cmd: list[str]) -> str:
         str(benchmarks_dir),
         "exec",
         "--interactive=false",
-        tool + "-client",
+        tool + ("-server" if server else "-client"),
     ] + cmd, capture_output=True, text=True)
-    return result.stdout.strip()
+    return result.stderr.strip()
 
 
-def tool_download(tool: str, file: str) -> float:
+def tool_download(tool: str, file: str) -> [float, str]:
     """Download `file` using `tool` and return the time in seconds it took."""
     start = time.perf_counter()
+    output = ""
 
     match tool:
         case "ftp":
-            _tool_run(tool, ["lftp", "-c", f'"open ftp-server; get files/{file}"'])
+            output = _tool_run(tool, ["lftp", "-c", f'set xfer:clobber on; open ftp-server; get files/{file}'])
         case "http3":
-            _tool_run(tool, ["curl", "-kO", "--http3", "https://http3-server/files/" + file])
+            output = _tool_run(tool, ["curl", "-kO", "--http3", "https://http3-server/files/" + file])
         case _:
             sys.exit("tool_download: unsupported tool " + tool)
 
     end = time.perf_counter()
-    return end - start
+    return end - start, output
 
 
-def tool_upload(tool: str, file: str) -> float:
+def tool_upload(tool: str, file: str) -> [float, str]:
     """Upload `file` using `tool` and return the time in seconds it took."""
     start = time.perf_counter()
+    output = ""
 
     match tool:
         case "ftp":
-            _tool_run(tool, ["lftp", "-c", f'"open ftp-server; put /ftp-files/uploads/{file}"'])
+            output = _tool_run(tool, ["lftp", "-c", f'open ftp-server; put /ftp-files/uploads/{file}'])
         # TODO: add http3 support
         case _:
             sys.exit("tool_upload: unsupported tool " + tool)
 
     end = time.perf_counter()
-    return end - start
+    return end - start, output
+
+
+def tc_add_download(tool: str, rule: str):
+    """Add tc rule that affects downloads with the given tool."""
+    # tc applies to egress (outgoing traffic)
+    _tool_run(tool, [
+        "tc",
+        "qdisc",
+        "add",
+        "dev",
+        "eth0",
+        "root"
+    ] + rule.split(" "), server=True)
+
+
+def tc_add_download_all(rule: str):
+    """Add tc rule that affects downloads with all tools."""
+    for tool in tools:
+        tc_add_download(tool, rule)
+
+
+def tc_add_upload(tool: str, rule: str):
+    """Add tc rule that affects uploads with the given tool."""
+    _tool_run(tool, [
+        "tc",
+        "qdisc",
+        "add",
+        "dev",
+        "eth0",
+        "root"
+    ] + rule.split(" "))
+
+
+def tc_add_upload_all(rule: str):
+    """Add tc rule that affects uploads with all tools."""
+    for tool in tools:
+        tc_add_upload(tool, rule)
+
+
+def tc_cleanup():
+    """Cleanup applied tc rules for all tools."""
+    for tool in tools:
+        _tool_run(tool, [
+            "tc",
+            "qdisc",
+            "del",
+            "dev",
+            "eth0",
+            "root"
+        ])
+
+        _tool_run(tool, [
+            "tc",
+            "qdisc",
+            "del",
+            "dev",
+            "eth0",
+            "root"
+        ], server=True)

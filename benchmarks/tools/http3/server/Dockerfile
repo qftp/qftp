@@ -5,6 +5,7 @@ RUN apt-get update && apt-get install -y \
     nginx \
     openssl \
     iputils-ping \
+    iproute2 \
     && rm -rf /var/lib/apt/lists/*
 
 RUN mkdir -p /etc/nginx/ssl /var/www/html/files

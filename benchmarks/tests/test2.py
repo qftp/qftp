@@ -2,6 +2,7 @@ import utils
 
 utils.tc_cleanup()
 utils.create_download_files(1, "100M")
+utils.tc_add_download_all("tbf rate 10mbps burst 32kbit latency 100ms")
 
 ftp_time_sec, out = utils.tool_download("ftp", "file_1")
 print("ftp:")
