@@ -67,16 +67,16 @@ def _tool_run(tool: str, cmd: list[str], server=False) -> str:
     return result.stderr.strip()
 
 
-def tool_download(tool: str, file: str) -> [float, str]:
-    """Download `file` using `tool` and return the time in seconds it took."""
+def tool_download(tool: str, files: list[str]) -> [float, str]:
+    """Download `files` using `tool` and return the time in seconds it took."""
     start = time.perf_counter()
     output = ""
 
     match tool:
         case "ftp":
-            output = _tool_run(tool, ["lftp", "-c", f'set xfer:clobber on; open ftp-server; get files/{file}'])
+            output = _tool_run(tool, ["lftp", "-c", f'set xfer:clobber on; open ftp-server; mget {map(lambda f: "files/" + f), files}'])
         case "http3":
-            output = _tool_run(tool, ["curl", "-kO", "--http3", "https://http3-server/files/" + file])
+            output = _tool_run(tool, ["curl", "-kZ", "--http3", "--remote-name-all", map(lambda f: "https://http3-server/files/" + f, files)])
         case _:
             sys.exit("tool_download: unsupported tool " + tool)
 
