@@ -6,6 +6,7 @@ RUN apt-get update && apt-get install -y \
     openssl \
     iputils-ping \
     iproute2 \
+    nftables \
     && rm -rf /var/lib/apt/lists/*
 
 RUN mkdir -p /etc/nginx/ssl /var/www/html/files

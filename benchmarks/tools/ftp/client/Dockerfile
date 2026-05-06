@@ -6,6 +6,7 @@ RUN apt-get update && apt-get install -y \
     iputils-ping \
     iproute2 \
     netbase \
+    nftables \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --chmod=600 .netrc /root/.netrc

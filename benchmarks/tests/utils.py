@@ -76,7 +76,7 @@ def tool_download(tool: str, files: list[str]) -> [float, str]:
         case "ftp":
             output = _tool_run(tool, ["lftp", "-c", f'set xfer:clobber on; open ftp-server; mget {" ".join(map(lambda f: "files/" + f, files))}'])
         case "http3":
-            output = _tool_run(tool, ["curl", "-kZ", "--http3", "--remote-name-all"] + list(map(lambda f: "https://http3-server/files/" + f, files)))
+            output = _tool_run(tool, ["curl", "-kZ", "--http3", "--parallel-max", "10", "--parallel-immediate", "--remote-name-all"] + list(map(lambda f: "https://http3-server/files/" + f, files)))
         case _:
             sys.exit("tool_download: unsupported tool " + tool)
 
@@ -118,11 +118,11 @@ def tc_add_download_all(rule: str):
         tc_add_download(tool, rule)
 
 
-def set_packet_loss_download(loss_percent: int):
+def set_packet_loss_download(loss: float):
     for tool in tools:
-        _tool_run(tool, "nft add table inet net_sim".split(" "), server=True)
-        _tool_run(tool, "nft add chain inet net_sim postrouting { type filter hook postrouting priority 0 \\; }".split(" "), server=True)
-        _tool_run(tool, f"nft add rule inet net_sim postrouting chaos probability {loss_percent} drop".split(" "), server=True)
+        _tool_run(tool, "nft add table inet loss".split(" "), server=True)
+        _tool_run(tool, "nft add chain inet loss postrouting { type filter hook output priority 0 \\; }".split(" "), server=True)
+        _tool_run(tool, f"nft add rule inet loss output random < 1.0 drop".split(" "), server=True)
 
 
 def tc_add_upload(tool: str, rule: str):
@@ -145,7 +145,7 @@ def tc_add_upload_all(rule: str):
 def net_cleanup():
     """Cleanup applied tc rules for all tools."""
     for tool in tools:
-        _tool_run(tool, "nft delete table inet net_sim".split(" "), server=True)
+        _tool_run(tool, "nft delete table inet loss".split(" "), server=True)
 
         _tool_run(tool, [
             "tc",

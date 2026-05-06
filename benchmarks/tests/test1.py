@@ -1,8 +1,7 @@
 import utils
 
 utils.net_cleanup()
-utils.tc_add_download_all("root cake bandwidth 1gbit rtt 10ms")
-utils.set_packet_loss_download(0)
+utils.tc_add_download_all("root cake bandwidth 1gbit rtt 10ms besteffort")
 
 file_sizes = ["1M", "10M", "50M", "100M", "250M", "500M", "1G", "2G", "5G"]
 times = []
@@ -12,8 +11,9 @@ for size in file_sizes:
     print("Generated files")
     ftp_time_sec, _ = utils.tool_download("ftp", ["file_1"])
     print("ftp done")
-    http3_time_sec, _ = utils.tool_download("http3", ["file_1"])
+    http3_time_sec, out = utils.tool_download("http3", ["file_1"])
     print("http3 done")
+    print(out)
     times.append({"ftp": ftp_time_sec, "http3": http3_time_sec})
 
 print("file size,ftp(s),http3(s)")
