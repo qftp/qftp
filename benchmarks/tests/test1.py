@@ -1,7 +1,8 @@
 import utils
 
-utils.tc_cleanup()
-utils.tc_add_download_all("root netem delay 10ms")
+utils.net_cleanup()
+utils.tc_add_download_all("root cake bandwidth 1gbit rtt 10ms")
+utils.set_packet_loss_download(0)
 
 file_sizes = ["1M", "10M", "50M", "100M", "250M", "500M", "1G", "2G", "5G"]
 times = []

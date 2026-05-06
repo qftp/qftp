@@ -118,6 +118,13 @@ def tc_add_download_all(rule: str):
         tc_add_download(tool, rule)
 
 
+def set_packet_loss_download(loss_percent: int):
+    for tool in tools:
+        _tool_run(tool, "nft add table inet net_sim".split(" "), server=True)
+        _tool_run(tool, "nft add chain inet net_sim postrouting { type filter hook postrouting priority 0 \\; }".split(" "), server=True)
+        _tool_run(tool, f"nft add rule inet net_sim postrouting chaos probability {loss_percent} drop".split(" "), server=True)
+
+
 def tc_add_upload(tool: str, rule: str):
     """Add tc rule that affects uploads with the given tool."""
     _tool_run(tool, [
@@ -135,9 +142,11 @@ def tc_add_upload_all(rule: str):
         tc_add_upload(tool, rule)
 
 
-def tc_cleanup():
+def net_cleanup():
     """Cleanup applied tc rules for all tools."""
     for tool in tools:
+        _tool_run(tool, "nft delete table inet net_sim".split(" "), server=True)
+
         _tool_run(tool, [
             "tc",
             "qdisc",

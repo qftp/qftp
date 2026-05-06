@@ -1,7 +1,8 @@
 import utils
 
 utils.tc_cleanup()
-utils.tc_add_download_all("root netem delay 10ms")
+utils.tc_add_download_all("root cake bandwidth 1gbit rtt 10ms")
+utils.set_packet_loss_download(0)
 
 file_counts = [1, 2, 5, 10, 25, 50, 100, 150, 200, 250, 500]
 times = []
