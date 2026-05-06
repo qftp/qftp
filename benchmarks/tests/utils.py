@@ -26,7 +26,7 @@ def _parse_bytes(size_str):
 
 
 def _create_random_files(count: int, size_bytes: int, dir: str):
-    block_size_bytes = _parse_bytes("10M")
+    block_size_bytes = _parse_bytes("1G")
 
     for i in range(count):
         file_name = f'file_{i + 1}'
@@ -74,9 +74,9 @@ def tool_download(tool: str, files: list[str]) -> [float, str]:
 
     match tool:
         case "ftp":
-            output = _tool_run(tool, ["lftp", "-c", f'set xfer:clobber on; open ftp-server; mget {map(lambda f: "files/" + f), files}'])
+            output = _tool_run(tool, ["lftp", "-c", f'set xfer:clobber on; open ftp-server; mget {" ".join(map(lambda f: "files/" + f, files))}'])
         case "http3":
-            output = _tool_run(tool, ["curl", "-kZ", "--http3", "--remote-name-all", map(lambda f: "https://http3-server/files/" + f, files)])
+            output = _tool_run(tool, ["curl", "-kZ", "--http3", "--remote-name-all"] + list(map(lambda f: "https://http3-server/files/" + f, files)))
         case _:
             sys.exit("tool_download: unsupported tool " + tool)
 
@@ -109,7 +109,6 @@ def tc_add_download(tool: str, rule: str):
         "add",
         "dev",
         "eth0",
-        "root"
     ] + rule.split(" "), server=True)
 
 
@@ -127,7 +126,6 @@ def tc_add_upload(tool: str, rule: str):
         "add",
         "dev",
         "eth0",
-        "root"
     ] + rule.split(" "))
 
 

@@ -1,12 +1,17 @@
 import utils
 
 utils.tc_cleanup()
-utils.create_download_files(1, "100M")
-utils.tc_add_download_all("tbf rate 10mbps burst 32kbit latency 100ms")
+utils.tc_add_download_all("root netem delay 10ms")
 
-ftp_time_sec, out = utils.tool_download("ftp", ["file_1"])
-http3_time_sec, out = utils.tool_download("http3", ["file_1"])
+file_counts = [1, 2, 5, 10, 25, 50, 100, 150, 200, 250, 500]
+times = []
+for count in file_counts:
+    print(f'Testing {count} files...')
+    utils.create_download_files(count, "10M")
+    ftp_time_sec, _ = utils.tool_download("ftp", ["file_1"])
+    http3_time_sec, _ = utils.tool_download("http3", ["file_1"])
+    times.append({"ftp": ftp_time_sec, "http3": http3_time_sec})
 
-print("file size,tool,time")
-print(f'100M,ftp,{ftp_time_sec}s')
-print(f'100M,http3,{http3_time_sec}s')
+print("file count,ftp(s),http3(s)")
+for i, count in enumerate(file_counts):
+    print(f'{count},{times[i]["ftp"]},{times[i]["http3"]}')
