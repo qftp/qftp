@@ -1,8 +1,11 @@
+use crate::common;
 use io::Write;
 use std::io;
+use std::net::{SocketAddr, IpAddr, Ipv4Addr};
 
 pub fn run() {
     println!("qftp client - type ? for help");
+    let mut client = Client::new();
 
     loop {
         // Prompt
@@ -41,10 +44,10 @@ pub fn run() {
 
         // Run command
         match tokens[0].as_str() {
-            "open" => open(args),
-            "get" => get(args),
-            "mget" => mget(args),
-            "put" => put(args),
+            "open" => client.open(args),
+            "get" => client.get(args),
+            "mget" => client.mget(args),
+            "put" => client.put(args),
             "?" => print_help(),
             "q" => break,
             cmd => {
@@ -65,45 +68,102 @@ q - quit
     )
 }
 
-/// Open a new connection to a qftp server.
-fn open(args: &[String]) {
-    if args.len() != 1 {
-        eprintln!("Usage: open <url>");
-        return;
-    }
-
-    let url = args[0].as_str();
-    println!("Called open with {url}");
+struct Client {
+    conn: Option<quiche::Connection>,
 }
 
-/// Download a single file from the active server connection.
-fn get(args: &[String]) {
-    if args.len() != 1 {
-        eprintln!("Usage: get <file>");
-        return;
+impl Client {
+    fn new() -> Client {
+        return Client { conn: None };
     }
 
-    let file_path = args[0].as_str();
-    println!("Called get with {file_path}");
-}
+    /// Open a new connection to a qftp server.
+    fn open(&mut self, args: &[String]) {
+        if args.len() != 1 {
+            eprintln!("Usage: open <url>");
+            return;
+        }
 
-/// Download multiple files from the active server connection.
-fn mget(args: &[String]) {
-    if args.len() == 0 {
-        eprintln!("Usage: mget <file1> ... <fileX>");
-        return;
+        let url = args[0].as_str();
+
+        let mut config = common::new_quiche_config().expect("Failed to create quiche config");
+        let scid = quiche::ConnectionId::default();
+        let local = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), common::QFTP_PORT);
+        let Ok(dest_ip) = url.parse::<IpAddr>() else {
+            eprint!("Failed to parse url");
+            return;
+        };
+        let peer = SocketAddr::new(dest_ip, common::QFTP_PORT);
+
+        self.conn = Some(
+            quiche::connect(Some(url), &scid, local, peer, &mut config).expect("Failed to connect"),
+        );
     }
 
-    println!("Called mget with {args:?}");
-}
+    /// Download a single file from the active server connection.
+    fn get(&mut self, args: &[String]) {
+        if args.len() != 1 {
+            eprintln!("Usage: get <file>");
+            return;
+        }
 
-/// Upload a single file to the active server connection
-fn put(args: &[String]) {
-    if args.len() != 1 {
-        eprintln!("Usage: put <file>");
-        return;
+        let Some(ref mut conn) = self.conn else {
+            eprintln!("Start a connection with open <url> before calling get");
+            return;
+        };
+
+        let file_path = args[0].as_str();
+
+        if conn.is_established() {
+            println!("Downloading file {file_path}...");
+            match conn.stream_send(0, format!("get {file_path}").as_bytes(), true) {
+                Ok(_) => (),
+                Err(err) => eprintln!("Failed to send message {err}"),
+            }
+        }
     }
 
-    let file_path = args[0].as_str();
-    println!("Called put with {file_path}");
+    /// Download multiple files from the active server connection.
+    fn mget(&mut self, args: &[String]) {
+        if args.len() == 0 {
+            eprintln!("Usage: mget <file1> ... <fileX>");
+            return;
+        }
+
+        let Some(ref mut conn) = self.conn else {
+            eprintln!("Start a connection with open <url> before calling mget");
+            return;
+        };
+
+        if conn.is_established() {
+            println!("Downloading files {args:?}...");
+            match conn.stream_send(0, format!("mget {args:?}").as_bytes(), true) {
+                Ok(_) => (),
+                Err(err) => eprintln!("Failed to send message {err}"),
+            }
+        }
+    }
+
+    /// Upload a single file to the active server connection
+    fn put(&mut self, args: &[String]) {
+        if args.len() != 1 {
+            eprintln!("Usage: put <file>");
+            return;
+        }
+
+        let Some(ref mut conn) = self.conn else {
+            eprintln!("Start a connection with open <url> before calling put");
+            return;
+        };
+
+        let file_path = args[0].as_str();
+
+        if conn.is_established() {
+            println!("Uploading file {file_path}...");
+            match conn.stream_send(0, format!("put {file_path}").as_bytes(), true) {
+                Ok(_) => (),
+                Err(err) => eprintln!("Failed to send message {err}"),
+            }
+        }
+    }
 }

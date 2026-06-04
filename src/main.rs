@@ -3,6 +3,7 @@ use std::process;
 
 mod client;
 mod server;
+mod common;
 
 fn main() {
     let mode = env::args().nth(1);
