@@ -2,7 +2,9 @@
 
 ⚡Blazingly fast `ftp` alternative, using the QUIC protocol.
 
-![qftp logo](./assets/qftp.png)
+<p align="center">
+  <img src="./assets/qftp.png" alt="qftp logo">
+</p>
 
 ## Compile
 
