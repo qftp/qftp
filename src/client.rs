@@ -86,7 +86,7 @@ struct ClientUpload {
     pos: usize,
     len: usize,
     reached_eof: bool,
-    is_authorized: bool, // Set to true once server sends RES_UPLOAD_START
+    is_authorized: bool, // Set to true once server sends common::RES_UPLOAD_START
     failed: bool,
 }
 
@@ -159,9 +159,8 @@ impl Client {
                                 local_save_path,
                             } => {
                                 let stream_id = next_stream_id;
-                                next_stream_id += 4; // Reserve next client-initiated bidi stream ID
+                                next_stream_id += 4;
 
-                                // Open target write space ahead of network initialization
                                 if let Ok(file) = OpenOptions::new()
                                     .create(true)
                                     .append(true)
@@ -175,11 +174,9 @@ impl Client {
                                         },
                                     );
 
-                                    // Construct our Framed payload: [CMD_DOWNLOAD] + [Path String]
                                     let mut payload = vec![common::CMD_DOWNLOAD];
                                     payload.extend_from_slice(remote_path.as_bytes());
 
-                                    // Blast command out to server
                                     conn.stream_send(stream_id, &payload, true).unwrap();
                                     println!(
                                         "[Client] Fired concurrent download request for {} on Stream {}",
@@ -196,13 +193,10 @@ impl Client {
 
                                 match std::fs::File::open(&local_path) {
                                     Ok(file) => {
-                                        let mut header_payload = vec![common::CMD_UPLOAD];
-                                        header_payload
-                                            .extend_from_slice(remote_save_path.as_bytes());
+                                        let mut payload = vec![common::CMD_UPLOAD];
+                                        payload.extend_from_slice(remote_save_path.as_bytes());
 
-                                        // Send initialization command frame. fin = false because file chunks follow!
-                                        conn.stream_send(stream_id, &header_payload, false)
-                                            .unwrap();
+                                        conn.stream_send(stream_id, &payload, false).unwrap();
                                         println!(
                                             "[Client] Handshaking upload for {} on Stream {}",
                                             local_path, stream_id
@@ -278,7 +272,6 @@ impl Client {
                                 if let Some(sink) = client_sinks.get_mut(&stream_id) {
                                     let mut data_start = 0;
 
-                                    // First packet chunk contains our server status flag validation header
                                     if !sink.is_initialized {
                                         let status_flag = chunk_buf[0];
                                         data_start = 1;
@@ -301,7 +294,6 @@ impl Client {
                                         );
                                     }
 
-                                    // Append chunk straight to its independent disk tracking descriptor
                                     if read_len > data_start {
                                         sink.file_writer
                                             .write_all(&chunk_buf[data_start..read_len])
@@ -375,7 +367,7 @@ impl Client {
                                         return false;
                                     }
                                 }
-                                Err(quiche::Error::Done) => {} // Window full; wait for ACKs on next loop iteration
+                                Err(quiche::Error::Done) => {}
                                 Err(_) => return false,
                             }
                         }
