@@ -2,6 +2,7 @@ use crate::common;
 use rand::TryRng;
 use std::fs::File;
 use std::io::Read;
+use std::io::Write;
 use std::time::Duration;
 use std::{
     collections::HashMap,
@@ -10,7 +11,7 @@ use std::{
 
 enum ActiveOperation {
     Downloading(FileTransfer),
-    // Uploading(FileReceiverState),
+    Uploading(FileReceiver),
 }
 
 struct FileTransfer {
@@ -19,6 +20,11 @@ struct FileTransfer {
     pos: usize,
     len: usize,
     reached_eof: bool,
+}
+
+struct FileReceiver {
+    file: File,
+    completed: bool,
 }
 
 pub fn run() {
@@ -102,10 +108,37 @@ pub fn run() {
                 if conn.is_established() {
                     // Step C.1: Check for NEW file requests from clients
                     for stream_id in conn.readable() {
-                        let mut stream_buf = [0; 1024];
+                        let mut stream_buf = [0; 8192];
 
                         // Only parse if we aren't already tracking this connection's stream
-                        if !active_operations.contains_key(&(cid.clone(), stream_id)) {
+                        if let Some(operation) =
+                            active_operations.get_mut(&(cid.clone(), stream_id))
+                        {
+                            match operation {
+                                ActiveOperation::Uploading(receiver) => {
+                                    match conn.stream_recv(stream_id, &mut stream_buf) {
+                                        Ok((read_len, fin)) => {
+                                            if read_len > 0 {
+                                                receiver
+                                                    .file
+                                                    .write_all(&stream_buf[..read_len])
+                                                    .unwrap();
+                                            }
+                                            if fin {
+                                                receiver.completed = true;
+                                                println!(
+                                                    "[Server] Conn {:?} Stream {} upload completely written to disk.",
+                                                    cid, stream_id
+                                                );
+                                            }
+                                        }
+                                        Err(quiche::Error::Done) => {}
+                                        Err(_) => receiver.completed = true, // Force clean up on stream errors
+                                    }
+                                }
+                                _ => {} // Downloads don't expect incoming application payload bytes
+                            }
+                        } else {
                             if let Ok((read_len, fin)) =
                                 conn.stream_recv(stream_id, &mut stream_buf)
                             {
@@ -163,10 +196,55 @@ pub fn run() {
                                             }
                                         }
                                         common::CMD_UPLOAD => {
+                                            let save_path =
+                                                std::str::from_utf8(payload).unwrap_or("").trim();
                                             println!(
-                                                "[Server] Inbound UPLOAD stream detected initialization. (Stubbed out for later)"
+                                                "[Server] Client requesting UPLOAD allocation at: {}",
+                                                save_path
                                             );
-                                            // Structural placeholder: Parse path, open writable file, insert ActiveOperation::Uploading
+
+                                            match std::fs::OpenOptions::new()
+                                                .create(true)
+                                                .write(true)
+                                                .truncate(true)
+                                                .open(save_path)
+                                            {
+                                                Ok(file) => {
+                                                    println!("[Server] Sending upload start");
+                                                    conn.stream_send(
+                                                        stream_id,
+                                                        &[common::RES_UPLOAD_START],
+                                                        false,
+                                                    )
+                                                    .ok();
+
+                                                    active_operations.insert(
+                                                        (cid.clone(), stream_id),
+                                                        ActiveOperation::Uploading(FileReceiver {
+                                                            file,
+                                                            completed: fin, // If the file initialization was immediately fin-marked
+                                                        }),
+                                                    );
+                                                }
+                                                Err(e) => {
+                                                    conn.stream_send(
+                                                        stream_id,
+                                                        &[common::RES_ERROR],
+                                                        false,
+                                                    )
+                                                    .ok();
+                                                    let err_msg = format!(
+                                                        "Failed to create destination file: {}",
+                                                        e
+                                                    );
+                                                    conn.stream_send(
+                                                        stream_id,
+                                                        err_msg.as_bytes(),
+                                                        true,
+                                                    )
+                                                    .ok();
+                                                }
+                                            }
                                         }
                                         _ => {
                                             eprintln!(
@@ -222,11 +300,16 @@ pub fn run() {
                                             Err(_) => return false,        // Stream broken
                                         }
                                     }
-                                } // ActiveOperation::Uploading(_) => { ... handle processing incoming upload chunks ... }
+                                }
+                                ActiveOperation::Uploading(receiver) => {
+                                    if receiver.completed {
+                                        return false;
+                                    }
+                                }
                             }
                             true
                         } else {
-                            false // Connection dead, sweep from memory
+                            false // Connection dead
                         }
                     });
                 }

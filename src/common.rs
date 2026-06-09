@@ -18,7 +18,7 @@ pub fn new_quiche_config(is_server: bool) -> Result<quiche::Config, quiche::Erro
     // Congestion control
     config.set_cc_algorithm(quiche::CongestionControlAlgorithm::CUBIC);
 
-    // TODO: TLS
+    // TLS
     if is_server {
         config.load_cert_chain_from_pem_file("cert.crt")?;
         config.load_priv_key_from_pem_file("cert.key")?;
@@ -45,3 +45,4 @@ pub const CMD_UPLOAD: u8 = 0x02;
 
 pub const RES_ERROR: u8 = 0x00;
 pub const RES_DOWNLOAD_START: u8 = 0x01;
+pub const RES_UPLOAD_START: u8 = 0x02;

@@ -4,6 +4,7 @@ use rand::TryRng;
 use std::collections::HashMap;
 use std::fs::{File, OpenOptions};
 use std::io;
+use std::io::Read;
 use std::net::{IpAddr, SocketAddr, UdpSocket};
 use std::sync::mpsc;
 use std::thread;
@@ -79,6 +80,16 @@ struct ClientSink {
     is_initialized: bool,
 }
 
+struct ClientUpload {
+    file: File,
+    buf: Vec<u8>,
+    pos: usize,
+    len: usize,
+    reached_eof: bool,
+    is_authorized: bool, // Set to true once server sends RES_UPLOAD_START
+    failed: bool,
+}
+
 struct Client {
     sender: Option<mpsc::Sender<QftpCommand>>,
 }
@@ -103,8 +114,6 @@ impl Client {
         let server_addr = SocketAddr::new(dest_ip, common::QFTP_PORT);
 
         let (tx, rx) = mpsc::channel::<QftpCommand>();
-
-        let mut active_sinks: HashMap<u64, (File, bool)> = HashMap::new();
 
         thread::spawn(move || {
             let mut config =
@@ -138,6 +147,7 @@ impl Client {
 
             let mut next_stream_id: u64 = 0;
             let mut client_sinks: HashMap<u64, ClientSink> = HashMap::new();
+            let mut client_uploads: HashMap<u64, ClientUpload> = HashMap::new();
 
             loop {
                 // Read MPSC channel
@@ -181,11 +191,38 @@ impl Client {
                                 local_path,
                                 remote_save_path,
                             } => {
-                                // Prepared structurally for you:
-                                // 1. Allocate stream_id += 4
-                                // 2. Open local file handle
-                                // 3. Send payload: vec![CMD_UPLOAD] + remote_save_path bytes (fin = false)
-                                // 4. Store handle in an outbound stream pump map
+                                let stream_id = next_stream_id;
+                                next_stream_id += 4;
+
+                                match std::fs::File::open(&local_path) {
+                                    Ok(file) => {
+                                        let mut header_payload = vec![common::CMD_UPLOAD];
+                                        header_payload
+                                            .extend_from_slice(remote_save_path.as_bytes());
+
+                                        // Send initialization command frame. fin = false because file chunks follow!
+                                        conn.stream_send(stream_id, &header_payload, false)
+                                            .unwrap();
+                                        println!(
+                                            "[Client] Handshaking upload for {} on Stream {}",
+                                            local_path, stream_id
+                                        );
+
+                                        client_uploads.insert(
+                                            stream_id,
+                                            ClientUpload {
+                                                file,
+                                                buf: vec![0; 4096],
+                                                pos: 0,
+                                                len: 0,
+                                                reached_eof: false,
+                                                is_authorized: false,
+                                                failed: false,
+                                            },
+                                        );
+                                    }
+                                    Err(e) => eprintln!("[Client] Local file error: {:?}", e),
+                                }
                             }
                         }
                     }
@@ -270,6 +307,29 @@ impl Client {
                                             .write_all(&chunk_buf[data_start..read_len])
                                             .unwrap();
                                     }
+                                } else if let Some(upload) = client_uploads.get_mut(&stream_id) {
+                                    if !upload.is_authorized && read_len > 0 {
+                                        match chunk_buf[0] {
+                                            common::RES_UPLOAD_START => {
+                                                println!(
+                                                    "[Client] Server approved upload on stream {}. Streaming chunks...",
+                                                    stream_id
+                                                );
+                                                upload.is_authorized = true;
+                                            }
+                                            common::RES_ERROR => {
+                                                let msg =
+                                                    std::str::from_utf8(&chunk_buf[1..read_len])
+                                                        .unwrap_or("Denied");
+                                                eprintln!(
+                                                    "[Client] Server rejected upload target: {}",
+                                                    msg
+                                                );
+                                                upload.failed = true;
+                                            }
+                                            _ => {}
+                                        }
+                                    }
                                 }
                             }
 
@@ -283,6 +343,45 @@ impl Client {
                         }
                     }
                 }
+
+                client_uploads.retain(|&stream_id, transfer| {
+                    if transfer.failed {
+                        return false;
+                    }
+
+                    if transfer.is_authorized {
+                        if transfer.pos == transfer.len && !transfer.reached_eof {
+                            transfer.pos = 0;
+                            match transfer.file.read(&mut transfer.buf) {
+                                Ok(0) => {
+                                    transfer.reached_eof = true;
+                                    transfer.len = 0;
+                                }
+                                Ok(n) => transfer.len = n,
+                                Err(_) => return false,
+                            }
+                        }
+
+                        if transfer.len > transfer.pos || transfer.reached_eof {
+                            let remaining = &transfer.buf[transfer.pos..transfer.len];
+                            match conn.stream_send(stream_id, remaining, transfer.reached_eof) {
+                                Ok(written) => {
+                                    transfer.pos += written;
+                                    if transfer.reached_eof && transfer.pos == transfer.len {
+                                        println!(
+                                            "[Client] Upload on stream {} successfully delivered!",
+                                            stream_id
+                                        );
+                                        return false;
+                                    }
+                                }
+                                Err(quiche::Error::Done) => {} // Window full; wait for ACKs on next loop iteration
+                                Err(_) => return false,
+                            }
+                        }
+                    }
+                    true
+                });
 
                 thread::sleep(Duration::from_millis(2));
             }
