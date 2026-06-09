@@ -28,6 +28,12 @@ cargo run -- server
 
 # Start client
 cargo run -- client
+
+# In client repl
+open 127.0.0.1 # Open server connection
+get file1.txt # Download
+mget file1.txt file2.txt # Download multiple
+put file1.txt # Upload
 ```
 
 ## Docs
