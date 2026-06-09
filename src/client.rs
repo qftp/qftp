@@ -1,6 +1,8 @@
 use crate::common;
 use io::Write;
 use rand::TryRng;
+use std::collections::HashMap;
+use std::fs::{File, OpenOptions};
 use std::io;
 use std::net::{IpAddr, SocketAddr, UdpSocket};
 use std::sync::mpsc;
@@ -72,8 +74,14 @@ q - quit
     )
 }
 
+enum Operation {
+    Get(String),
+    Mget(Vec<String>),
+    Put(String),
+}
+
 struct Client {
-    sender: Option<mpsc::Sender<String>>,
+    sender: Option<mpsc::Sender<Operation>>,
 }
 
 impl Client {
@@ -95,7 +103,9 @@ impl Client {
         };
         let server_addr = SocketAddr::new(dest_ip, common::QFTP_PORT);
 
-        let (tx, rx) = mpsc::channel::<String>();
+        let (tx, rx) = mpsc::channel::<Operation>();
+
+        let mut active_sinks: HashMap<u64, (File, bool)> = HashMap::new();
 
         thread::spawn(move || {
             let mut config =
@@ -110,7 +120,9 @@ impl Client {
                 .expect("Failed to get UDP socket local_addr");
 
             let mut scid_bytes = vec![0u8; quiche::MAX_CONN_ID_LEN];
-            rand::rng().try_fill_bytes(&mut scid_bytes).expect("Failed to generate connection ID");
+            rand::rng()
+                .try_fill_bytes(&mut scid_bytes)
+                .expect("Failed to generate connection ID");
             let scid = quiche::ConnectionId::from_vec(scid_bytes);
 
             let mut conn = quiche::connect(
@@ -119,7 +131,8 @@ impl Client {
                 local_addr,
                 server_addr,
                 &mut config,
-            ).expect("Failed to create quiche connection");
+            )
+            .expect("Failed to create quiche connection");
 
             let mut buf = [0; 65535];
             let mut out = [0; 65535];
@@ -129,15 +142,20 @@ impl Client {
             loop {
                 // Read MPSC channel
                 if conn.is_established() {
-                    while let Ok(message_to_send) = rx.try_recv() {
-                        // Send the message and flag `fin` as true to signify the stream's payload is complete
-                        match conn.stream_send(next_stream_id, message_to_send.as_bytes(), true) {
-                            Ok(_bytes) => {
-                                next_stream_id += 4; // Increment to next valid client bidi stream ID
+                    while let Ok(operation) = rx.try_recv() {
+                        match operation {
+                            Operation::Get(file_path) => {
+                                match conn.stream_send(next_stream_id, file_path.as_bytes(), true) {
+                                    Ok(_bytes) => {
+                                        next_stream_id += 4; // Increment to next valid client bidi stream ID
+                                    }
+                                    Err(e) => {
+                                        eprintln!("[QUIC Background] Stream send error: {:?}", e);
+                                    }
+                                }
                             }
-                            Err(e) => {
-                                eprintln!("[QUIC Background] Stream send error: {:?}", e);
-                            }
+                            Operation::Mget(_) => (),
+                            Operation::Put(_) => (),
                         }
                     }
                 }
@@ -182,6 +200,75 @@ impl Client {
                     }
                 }
 
+                // Process received streams
+                if conn.is_established() {
+                    for stream_id in conn.readable() {
+                        let mut chunk_buf = [0; 8192]; // 8KB read window
+
+                        match conn.stream_recv(stream_id, &mut chunk_buf) {
+                            Ok((read_len, fin)) if read_len > 0 => {
+                                let mut data_start = 0;
+
+                                // If this is the very first packet on this stream, parse our protocol header
+                                if !active_sinks.contains_key(&stream_id) {
+                                    let status_code = chunk_buf[0];
+                                    data_start = 1; // Skip the protocol prefix byte
+
+                                    if status_code == 0x00 {
+                                        let err_msg = std::str::from_utf8(&chunk_buf[1..read_len])
+                                            .unwrap_or("Error");
+                                        eprintln!("[Client] Server failure: {}", err_msg);
+                                        active_sinks.insert(
+                                            stream_id,
+                                            (File::open("/dev/null").unwrap(), true),
+                                        ); // dummy error sink
+                                        continue;
+                                    } else if status_code == 0x01 {
+                                        // Create a unique local file for this specific stream download
+                                        let save_path =
+                                            format!("download_stream_{}.dat", stream_id);
+                                        let file = OpenOptions::new()
+                                            .create(true)
+                                            .append(true)
+                                            .open(&save_path)
+                                            .unwrap();
+                                        println!(
+                                            "[Client] Stream {} verified. Writing to {}",
+                                            stream_id, save_path
+                                        );
+                                        active_sinks.insert(stream_id, (file, false));
+                                    }
+                                }
+
+                                // Write this payload chunk directly to disk
+                                if let Some((file, is_error)) = active_sinks.get_mut(&stream_id) {
+                                    if !*is_error && read_len > data_start {
+                                        file.write_all(&chunk_buf[data_start..read_len]).unwrap();
+                                    }
+                                }
+
+                                if fin {
+                                    println!(
+                                        "[Client] Stream {} finished downloading cleanly.",
+                                        stream_id
+                                    );
+                                    active_sinks.remove(&stream_id);
+                                }
+                            }
+                            Ok((_, fin)) => {
+                                if fin {
+                                    active_sinks.remove(&stream_id);
+                                }
+                            }
+                            Err(quiche::Error::Done) => {}
+                            Err(e) => {
+                                eprintln!("[Client] Stream read error: {:?}", e);
+                                active_sinks.remove(&stream_id);
+                            }
+                        }
+                    }
+                }
+
                 thread::sleep(Duration::from_millis(2));
             }
         });
@@ -201,12 +288,12 @@ impl Client {
             return;
         };
 
-        let file_path = args[0].as_str();
+        let file_path = args[0].clone();
 
         println!("Downloading file {file_path}...");
-        match sender.send(format!("get {file_path}").to_string()) {
+        match sender.send(Operation::Get(file_path)) {
             Ok(_) => (),
-            Err(err) => eprintln!("Failed to send data {err}"),
+            Err(err) => eprintln!("Failed to send operation {err}"),
         }
     }
 
@@ -223,7 +310,7 @@ impl Client {
         };
 
         println!("Downloading files {args:?}...");
-        match sender.send(format!("mget {args:?}").to_string()) {
+        match sender.send(Operation::Mget(args.to_vec())) {
             Ok(_) => (),
             Err(err) => eprintln!("Failed to send data {err}"),
         }
@@ -241,10 +328,10 @@ impl Client {
             return;
         };
 
-        let file_path = args[0].as_str();
+        let file_path = args[0].clone();
 
         println!("Uploading file {file_path}...");
-        match sender.send(format!("put {file_path}").to_string()) {
+        match sender.send(Operation::Put(file_path)) {
             Ok(_) => (),
             Err(err) => eprintln!("Failed to send data {err}"),
         }
