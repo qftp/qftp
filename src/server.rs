@@ -97,9 +97,6 @@ pub fn run() {
                                 print!("{}", text);
                                 std::io::stdout().flush().unwrap();
                             }
-                            if fin {
-                                println!("\n--- [Stream {} Closed] ---", stream_id);
-                            }
                         }
                     }
                 }

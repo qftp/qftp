@@ -126,18 +126,13 @@ impl Client {
 
             let mut next_stream_id: u64 = 0;
 
-            println!("[QUIC Background] Thread started, connecting...");
-
             loop {
                 // Read MPSC channel
                 if conn.is_established() {
                     while let Ok(message_to_send) = rx.try_recv() {
-                        println!("[QUIC Background] App requested send. Allocating Stream {}", next_stream_id);
-
                         // Send the message and flag `fin` as true to signify the stream's payload is complete
                         match conn.stream_send(next_stream_id, message_to_send.as_bytes(), true) {
                             Ok(bytes) => {
-                                println!("[QUIC Background] Sent {} bytes.", bytes);
                                 next_stream_id += 4; // Increment to next valid client bidi stream ID
                             }
                             Err(e) => {
