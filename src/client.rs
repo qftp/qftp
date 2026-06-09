@@ -132,7 +132,7 @@ impl Client {
                     while let Ok(message_to_send) = rx.try_recv() {
                         // Send the message and flag `fin` as true to signify the stream's payload is complete
                         match conn.stream_send(next_stream_id, message_to_send.as_bytes(), true) {
-                            Ok(bytes) => {
+                            Ok(_bytes) => {
                                 next_stream_id += 4; // Increment to next valid client bidi stream ID
                             }
                             Err(e) => {
@@ -150,7 +150,7 @@ impl Client {
                                 eprintln!("[QUIC Background] Socket write failure: {:?}", e);
                             }
                         }
-                        Err(quiche::Error::Done) => break, 
+                        Err(quiche::Error::Done) => break,
                         Err(e) => {
                             eprintln!("[QUIC Background] QUIC engine compile error: {:?}", e);
                             break;
