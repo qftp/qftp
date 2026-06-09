@@ -1,4 +1,4 @@
-use crate::common;
+use crate::common::{self, QftpCommand};
 use io::Write;
 use rand::TryRng;
 use std::collections::HashMap;
@@ -74,14 +74,13 @@ q - quit
     )
 }
 
-enum Operation {
-    Get(String),
-    Mget(Vec<String>),
-    Put(String),
+struct ClientSink {
+    file_writer: File,
+    is_initialized: bool,
 }
 
 struct Client {
-    sender: Option<mpsc::Sender<Operation>>,
+    sender: Option<mpsc::Sender<QftpCommand>>,
 }
 
 impl Client {
@@ -103,7 +102,7 @@ impl Client {
         };
         let server_addr = SocketAddr::new(dest_ip, common::QFTP_PORT);
 
-        let (tx, rx) = mpsc::channel::<Operation>();
+        let (tx, rx) = mpsc::channel::<QftpCommand>();
 
         let mut active_sinks: HashMap<u64, (File, bool)> = HashMap::new();
 
@@ -138,24 +137,56 @@ impl Client {
             let mut out = [0; 65535];
 
             let mut next_stream_id: u64 = 0;
+            let mut client_sinks: HashMap<u64, ClientSink> = HashMap::new();
 
             loop {
                 // Read MPSC channel
                 if conn.is_established() {
-                    while let Ok(operation) = rx.try_recv() {
-                        match operation {
-                            Operation::Get(file_path) => {
-                                match conn.stream_send(next_stream_id, file_path.as_bytes(), true) {
-                                    Ok(_bytes) => {
-                                        next_stream_id += 4; // Increment to next valid client bidi stream ID
-                                    }
-                                    Err(e) => {
-                                        eprintln!("[QUIC Background] Stream send error: {:?}", e);
-                                    }
+                    while let Ok(cmd) = rx.try_recv() {
+                        match cmd {
+                            QftpCommand::Download {
+                                remote_path,
+                                local_save_path,
+                            } => {
+                                let stream_id = next_stream_id;
+                                next_stream_id += 4; // Reserve next client-initiated bidi stream ID
+
+                                // Open target write space ahead of network initialization
+                                if let Ok(file) = OpenOptions::new()
+                                    .create(true)
+                                    .append(true)
+                                    .open(&local_save_path)
+                                {
+                                    client_sinks.insert(
+                                        stream_id,
+                                        ClientSink {
+                                            file_writer: file,
+                                            is_initialized: false,
+                                        },
+                                    );
+
+                                    // Construct our Framed payload: [CMD_DOWNLOAD] + [Path String]
+                                    let mut payload = vec![common::CMD_DOWNLOAD];
+                                    payload.extend_from_slice(remote_path.as_bytes());
+
+                                    // Blast command out to server
+                                    conn.stream_send(stream_id, &payload, true).unwrap();
+                                    println!(
+                                        "[Client] Fired concurrent download request for {} on Stream {}",
+                                        remote_path, stream_id
+                                    );
                                 }
                             }
-                            Operation::Mget(_) => (),
-                            Operation::Put(_) => (),
+                            QftpCommand::Upload {
+                                local_path,
+                                remote_save_path,
+                            } => {
+                                // Prepared structurally for you:
+                                // 1. Allocate stream_id += 4
+                                // 2. Open local file handle
+                                // 3. Send payload: vec![CMD_UPLOAD] + remote_save_path bytes (fin = false)
+                                // 4. Store handle in an outbound stream pump map
+                            }
                         }
                     }
                 }
@@ -203,67 +234,51 @@ impl Client {
                 // Process received streams
                 if conn.is_established() {
                     for stream_id in conn.readable() {
-                        let mut chunk_buf = [0; 8192]; // 8KB read window
+                        let mut chunk_buf = [0; 8192];
 
-                        match conn.stream_recv(stream_id, &mut chunk_buf) {
-                            Ok((read_len, fin)) if read_len > 0 => {
-                                let mut data_start = 0;
+                        if let Ok((read_len, fin)) = conn.stream_recv(stream_id, &mut chunk_buf) {
+                            if read_len > 0 {
+                                if let Some(sink) = client_sinks.get_mut(&stream_id) {
+                                    let mut data_start = 0;
 
-                                // If this is the very first packet on this stream, parse our protocol header
-                                if !active_sinks.contains_key(&stream_id) {
-                                    let status_code = chunk_buf[0];
-                                    data_start = 1; // Skip the protocol prefix byte
+                                    // First packet chunk contains our server status flag validation header
+                                    if !sink.is_initialized {
+                                        let status_flag = chunk_buf[0];
+                                        data_start = 1;
+                                        sink.is_initialized = true;
 
-                                    if status_code == 0x00 {
-                                        let err_msg = std::str::from_utf8(&chunk_buf[1..read_len])
-                                            .unwrap_or("Error");
-                                        eprintln!("[Client] Server failure: {}", err_msg);
-                                        active_sinks.insert(
-                                            stream_id,
-                                            (File::open("/dev/null").unwrap(), true),
-                                        ); // dummy error sink
-                                        continue;
-                                    } else if status_code == 0x01 {
-                                        // Create a unique local file for this specific stream download
-                                        let save_path =
-                                            format!("download_stream_{}.dat", stream_id);
-                                        let file = OpenOptions::new()
-                                            .create(true)
-                                            .append(true)
-                                            .open(&save_path)
-                                            .unwrap();
+                                        if status_flag == common::RES_ERROR {
+                                            let err_msg =
+                                                std::str::from_utf8(&chunk_buf[1..read_len])
+                                                    .unwrap_or("Server Error");
+                                            eprintln!(
+                                                "[Client] Stream {} download failed: {}",
+                                                stream_id, err_msg
+                                            );
+                                            client_sinks.remove(&stream_id);
+                                            continue;
+                                        }
                                         println!(
-                                            "[Client] Stream {} verified. Writing to {}",
-                                            stream_id, save_path
+                                            "[Client] Stream {} download verified active by server.",
+                                            stream_id
                                         );
-                                        active_sinks.insert(stream_id, (file, false));
+                                    }
+
+                                    // Append chunk straight to its independent disk tracking descriptor
+                                    if read_len > data_start {
+                                        sink.file_writer
+                                            .write_all(&chunk_buf[data_start..read_len])
+                                            .unwrap();
                                     }
                                 }
-
-                                // Write this payload chunk directly to disk
-                                if let Some((file, is_error)) = active_sinks.get_mut(&stream_id) {
-                                    if !*is_error && read_len > data_start {
-                                        file.write_all(&chunk_buf[data_start..read_len]).unwrap();
-                                    }
-                                }
-
-                                if fin {
-                                    println!(
-                                        "[Client] Stream {} finished downloading cleanly.",
-                                        stream_id
-                                    );
-                                    active_sinks.remove(&stream_id);
-                                }
                             }
-                            Ok((_, fin)) => {
-                                if fin {
-                                    active_sinks.remove(&stream_id);
-                                }
-                            }
-                            Err(quiche::Error::Done) => {}
-                            Err(e) => {
-                                eprintln!("[Client] Stream read error: {:?}", e);
-                                active_sinks.remove(&stream_id);
+
+                            if fin {
+                                println!(
+                                    "[Client] Stream {} finished pipeline execution.",
+                                    stream_id
+                                );
+                                client_sinks.remove(&stream_id);
                             }
                         }
                     }
@@ -291,9 +306,12 @@ impl Client {
         let file_path = args[0].clone();
 
         println!("Downloading file {file_path}...");
-        match sender.send(Operation::Get(file_path)) {
+        match sender.send(QftpCommand::Download {
+            remote_path: file_path,
+            local_save_path: "result.dat".to_string(),
+        }) {
             Ok(_) => (),
-            Err(err) => eprintln!("Failed to send operation {err}"),
+            Err(err) => eprintln!("Failed to queue download {err}"),
         }
     }
 
@@ -310,9 +328,15 @@ impl Client {
         };
 
         println!("Downloading files {args:?}...");
-        match sender.send(Operation::Mget(args.to_vec())) {
-            Ok(_) => (),
-            Err(err) => eprintln!("Failed to send data {err}"),
+
+        for (i, file_path) in args.iter().enumerate() {
+            match sender.send(QftpCommand::Download {
+                remote_path: file_path.clone(),
+                local_save_path: format!("result{i}.dat"),
+            }) {
+                Ok(_) => (),
+                Err(err) => eprintln!("Failed to queue download {err}"),
+            }
         }
     }
 
@@ -331,9 +355,12 @@ impl Client {
         let file_path = args[0].clone();
 
         println!("Uploading file {file_path}...");
-        match sender.send(Operation::Put(file_path)) {
+        match sender.send(QftpCommand::Upload {
+            remote_save_path: "result.dat".to_string(),
+            local_path: file_path,
+        }) {
             Ok(_) => (),
-            Err(err) => eprintln!("Failed to send data {err}"),
+            Err(err) => eprintln!("Failed to queue download {err}"),
         }
     }
 }

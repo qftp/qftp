@@ -8,6 +8,11 @@ use std::{
     net::{SocketAddr, UdpSocket},
 };
 
+enum ActiveOperation {
+    Downloading(FileTransfer),
+    // Uploading(FileReceiverState),
+}
+
 struct FileTransfer {
     file: File,
     buf: Vec<u8>,
@@ -32,7 +37,7 @@ pub fn run() {
     let mut conns: HashMap<quiche::ConnectionId<'static>, quiche::Connection> = HashMap::new();
 
     // Keep track of active transfers (client downloading file(s) from server)
-    let mut active_downloads: HashMap<(quiche::ConnectionId<'static>, u64), FileTransfer> =
+    let mut active_operations: HashMap<(quiche::ConnectionId<'static>, u64), ActiveOperation> =
         HashMap::new();
 
     println!(
@@ -97,81 +102,132 @@ pub fn run() {
                 if conn.is_established() {
                     // Step C.1: Check for NEW file requests from clients
                     for stream_id in conn.readable() {
-                        let mut path_buf = [0; 512];
-                        if let Ok((read_len, fin)) = conn.stream_recv(stream_id, &mut path_buf) {
-                            if !fin {
-                                continue;
-                            }
-                            let file_path =
-                                std::str::from_utf8(&path_buf[..read_len]).unwrap().trim();
+                        let mut stream_buf = [0; 1024];
 
-                            match File::open(file_path) {
-                                Ok(file) => {
-                                    // Send Success Prefix (0x01) immediately
-                                    conn.stream_send(stream_id, &[0x01], false).ok();
+                        // Only parse if we aren't already tracking this connection's stream
+                        if !active_operations.contains_key(&(cid.clone(), stream_id)) {
+                            if let Ok((read_len, fin)) =
+                                conn.stream_recv(stream_id, &mut stream_buf)
+                            {
+                                if read_len > 1 {
+                                    let command_byte = stream_buf[0];
+                                    let payload = &stream_buf[1..read_len];
 
-                                    // Register the stateful transfer
-                                    active_downloads.insert(
-                                        (cid.clone(), stream_id),
-                                        FileTransfer {
-                                            file,
-                                            buf: vec![0; 4096], // 4KB chunks keep RAM usage negligible
-                                            pos: 0,
-                                            len: 0,
-                                            reached_eof: false,
-                                        },
-                                    );
-                                }
-                                Err(e) => {
-                                    // File missing, send error prefix (0x00) + msg
-                                    conn.stream_send(stream_id, &[0x00], false).ok();
-                                    let err_msg = format!("File error: {}", e);
-                                    conn.stream_send(stream_id, err_msg.as_bytes(), true).ok();
+                                    match command_byte {
+                                        common::CMD_DOWNLOAD => {
+                                            let file_path =
+                                                std::str::from_utf8(payload).unwrap_or("").trim();
+                                            println!(
+                                                "[Server] Conn {:?} Stream {} requested DOWNLOAD of: {}",
+                                                cid, stream_id, file_path
+                                            );
+
+                                            match File::open(file_path) {
+                                                Ok(file) => {
+                                                    // Acknowledge download start
+                                                    conn.stream_send(
+                                                        stream_id,
+                                                        &[common::RES_DOWNLOAD_START],
+                                                        false,
+                                                    )
+                                                    .ok();
+
+                                                    active_operations.insert(
+                                                        (cid.clone(), stream_id),
+                                                        ActiveOperation::Downloading(
+                                                            FileTransfer {
+                                                                file,
+                                                                buf: vec![0; 4096],
+                                                                pos: 0,
+                                                                len: 0,
+                                                                reached_eof: false,
+                                                            },
+                                                        ),
+                                                    );
+                                                }
+                                                Err(e) => {
+                                                    conn.stream_send(
+                                                        stream_id,
+                                                        &[common::RES_ERROR],
+                                                        false,
+                                                    )
+                                                    .ok();
+                                                    let err_msg = format!("File missing: {}", e);
+                                                    conn.stream_send(
+                                                        stream_id,
+                                                        err_msg.as_bytes(),
+                                                        true,
+                                                    )
+                                                    .ok();
+                                                }
+                                            }
+                                        }
+                                        common::CMD_UPLOAD => {
+                                            println!(
+                                                "[Server] Inbound UPLOAD stream detected initialization. (Stubbed out for later)"
+                                            );
+                                            // Structural placeholder: Parse path, open writable file, insert ActiveOperation::Uploading
+                                        }
+                                        _ => {
+                                            eprintln!(
+                                                "[Server] Unknown command prefix received: {}",
+                                                command_byte
+                                            );
+                                        }
+                                    }
                                 }
                             }
                         }
                     }
 
                     // Step C.2: Pump chunks for existing active transfers
-                    active_downloads.retain(|id, transfer| {
-                        // If our chunk buffer is empty, pull the next block from disk
-                        if transfer.pos == transfer.len && !transfer.reached_eof {
-                            transfer.pos = 0;
-                            match transfer.file.read(&mut transfer.buf) {
-                                Ok(0) => {
-                                    transfer.reached_eof = true;
-                                    transfer.len = 0;
-                                }
-                                Ok(n) => transfer.len = n,
-                                Err(_) => return false, // Drop on disk read failure
-                            }
-                        }
-
-                        // If we have data to clear out, try shifting it into the QUIC pipe
-                        if transfer.len > transfer.pos || transfer.reached_eof {
-                            let remaining_chunk = &transfer.buf[transfer.pos..transfer.len];
-                            let is_fin = transfer.reached_eof;
-
-                            match conn.stream_send(id.1, remaining_chunk, is_fin) {
-                                Ok(written) => {
-                                    transfer.pos += written;
-                                    // If we hit EOF and flushed the last byte, terminate tracking
-                                    if transfer.reached_eof && transfer.pos == transfer.len {
-                                        println!(
-                                            "[Server] Stream {} download complete!",
-                                            id.1
-                                        );
-                                        return false;
+                    active_operations.retain(|(c_key, s_id), operation| {
+                        if let Some(current_conn) = conns.get_mut(c_key) {
+                            match operation {
+                                ActiveOperation::Downloading(transfer) => {
+                                    // Populate buffer from disk if empty
+                                    if transfer.pos == transfer.len && !transfer.reached_eof {
+                                        transfer.pos = 0;
+                                        match transfer.file.read(&mut transfer.buf) {
+                                            Ok(0) => {
+                                                transfer.reached_eof = true;
+                                                transfer.len = 0;
+                                            }
+                                            Ok(n) => transfer.len = n,
+                                            Err(_) => return false,
+                                        }
                                     }
-                                }
-                                Err(quiche::Error::Done) => {
-                                    // The QUIC window is full! Stop sending for this specific stream.
-                                    // We keep it in the Map and try again on the next loop tick.
-                                }
-                                Err(_) => return false, // Connection dropped, clean up memory
+
+                                    // Push chunk to the specific connection stream
+                                    if transfer.len > transfer.pos || transfer.reached_eof {
+                                        let remaining = &transfer.buf[transfer.pos..transfer.len];
+                                        match current_conn.stream_send(
+                                            *s_id,
+                                            remaining,
+                                            transfer.reached_eof,
+                                        ) {
+                                            Ok(written) => {
+                                                transfer.pos += written;
+                                                if transfer.reached_eof
+                                                    && transfer.pos == transfer.len
+                                                {
+                                                    println!(
+                                                        "[Server] Stream {} download complete.",
+                                                        s_id
+                                                    );
+                                                    return false; // Remove operation
+                                                }
+                                            }
+                                            Err(quiche::Error::Done) => {} // Window full, hold tight until next tick
+                                            Err(_) => return false,        // Stream broken
+                                        }
+                                    }
+                                } // ActiveOperation::Uploading(_) => { ... handle processing incoming upload chunks ... }
                             }
+                            true
+                        } else {
+                            false // Connection dead, sweep from memory
                         }
-                        true // Keep processing this file on future ticks
                     });
                 }
             }

@@ -28,3 +28,20 @@ pub fn new_quiche_config(is_server: bool) -> Result<quiche::Config, quiche::Erro
 
     return Ok(config);
 }
+
+pub enum QftpCommand {
+    Download {
+        remote_path: String,
+        local_save_path: String,
+    },
+    Upload {
+        local_path: String,
+        remote_save_path: String,
+    },
+}
+
+pub const CMD_DOWNLOAD: u8 = 0x01;
+pub const CMD_UPLOAD: u8 = 0x02;
+
+pub const RES_ERROR: u8 = 0x00;
+pub const RES_DOWNLOAD_START: u8 = 0x01;
