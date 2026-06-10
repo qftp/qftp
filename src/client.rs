@@ -1,4 +1,4 @@
-use crate::common::{self, QftpCommand};
+use crate::common;
 use io::Write;
 use rand::TryRng;
 use std::collections::HashMap;
@@ -90,8 +90,19 @@ struct ClientUpload {
     failed: bool,
 }
 
+pub enum Command {
+    Download {
+        remote_path: String,
+        local_save_path: String,
+    },
+    Upload {
+        local_path: String,
+        remote_save_path: String,
+    },
+}
+
 struct Client {
-    sender: Option<mpsc::Sender<QftpCommand>>,
+    sender: Option<mpsc::Sender<Command>>,
 }
 
 impl Client {
@@ -113,7 +124,7 @@ impl Client {
         };
         let server_addr = SocketAddr::new(dest_ip, common::QFTP_PORT);
 
-        let (tx, rx) = mpsc::channel::<QftpCommand>();
+        let (tx, rx) = mpsc::channel::<Command>();
 
         thread::spawn(move || {
             let mut config =
@@ -154,7 +165,7 @@ impl Client {
                 if conn.is_established() {
                     while let Ok(cmd) = rx.try_recv() {
                         match cmd {
-                            QftpCommand::Download {
+                            Command::Download {
                                 remote_path,
                                 local_save_path,
                             } => {
@@ -184,7 +195,7 @@ impl Client {
                                     );
                                 }
                             }
-                            QftpCommand::Upload {
+                            Command::Upload {
                                 local_path,
                                 remote_save_path,
                             } => {
@@ -397,7 +408,7 @@ impl Client {
         let file_path = args[0].clone();
 
         println!("Downloading file {file_path}...");
-        match sender.send(QftpCommand::Download {
+        match sender.send(Command::Download {
             remote_path: file_path,
             local_save_path: "result.dat".to_string(),
         }) {
@@ -421,7 +432,7 @@ impl Client {
         println!("Downloading files {args:?}...");
 
         for (i, file_path) in args.iter().enumerate() {
-            match sender.send(QftpCommand::Download {
+            match sender.send(Command::Download {
                 remote_path: file_path.clone(),
                 local_save_path: format!("result{i}.dat"),
             }) {
@@ -446,7 +457,7 @@ impl Client {
         let file_path = args[0].clone();
 
         println!("Uploading file {file_path}...");
-        match sender.send(QftpCommand::Upload {
+        match sender.send(Command::Upload {
             remote_save_path: "result.dat".to_string(),
             local_path: file_path,
         }) {
